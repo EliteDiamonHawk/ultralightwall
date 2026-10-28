@@ -2,6 +2,10 @@
 
 UltralightWall hosts web pages as Windows desktop wallpapers using Ultralight AppCore. It creates native Ultralight windows in-process, embeds them behind desktop icons, and keeps tray controls plus low-level desktop input routing.
 
+## BrowserWall Collection
+
+see [BrowserWall.md](https://github.com/EliteDiamonHawk/wv2wall/blob/main/BrowserWall.md)
+
 ## Requirements
 
 - Windows 10/11
