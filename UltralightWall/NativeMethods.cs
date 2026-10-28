@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ChromiumWall;
+namespace UltralightWall;
 
 internal static class NativeMethods
 {

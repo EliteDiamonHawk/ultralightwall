@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace ChromiumWall;
+namespace UltralightWall;
 
 internal static class Program
 {
@@ -47,31 +47,25 @@ public sealed class HostOptions
 {
     private HostOptions() { }
 
-    public string BrowserPath { get; private init; } = "";
     public string Url { get; private init; } = "";
-    public IReadOnlyList<string> BrowserArguments { get; private init; } = Array.Empty<string>();
     public IReadOnlyList<string> ExplicitWindowIds { get; private init; } = Array.Empty<string>();
     public IReadOnlyDictionary<int, string> MonitorUrls { get; private init; } = new Dictionary<int, string>();
     public WallpaperMode Mode { get; private init; } = WallpaperMode.Span;
     public int SelectedMonitor { get; private init; }
-    public int PollIntervalMs { get; private init; } = 250;
-    public TimeSpan Timeout { get; private init; } = TimeSpan.FromSeconds(30);
-    public int TitlebarOffset { get; private init; }
+    public int ReconcileIntervalMs { get; private init; } = 250;
+    public TimeSpan StartupTimeout { get; private init; } = TimeSpan.FromSeconds(30);
     public bool Verbose { get; private init; }
     public bool ShowHelp { get; private init; }
 
     public static HostOptions Parse(string[] args)
     {
-        string? browserPath = null;
         string url = DefaultProbeUrl();
-        var browserArguments = new List<string>();
         var windowIds = new List<string>();
         var monitorUrls = new Dictionary<int, string>();
         WallpaperMode mode = WallpaperMode.Span;
         int selectedMonitor = 0;
-        int pollMs = 250;
-        int timeoutMs = 30_000;
-        int titlebarOffset = 0;
+        int reconcileMs = 250;
+        int startupTimeoutMs = 30_000;
         bool verbose = false;
 
         for (int index = 0; index < args.Length; index++)
@@ -97,14 +91,8 @@ public sealed class HostOptions
 
             switch (option)
             {
-                case "--browser":
-                    browserPath = NextValue(args, ref index, option, inlineValue);
-                    break;
                 case "--url":
                     url = UrlBuilder.Normalize(NextValue(args, ref index, option, inlineValue));
-                    break;
-                case "--browser-arg":
-                    browserArguments.Add(NextValue(args, ref index, option, inlineValue, true));
                     break;
                 case "--window":
                 {
@@ -137,39 +125,26 @@ public sealed class HostOptions
                 case "--monitor":
                     selectedMonitor = ParsePositiveInt(NextValue(args, ref index, option, inlineValue), option) - 1;
                     break;
-                case "--poll-ms":
-                    pollMs = ParsePositiveInt(NextValue(args, ref index, option, inlineValue), option);
+                case "--reconcile-ms":
+                    reconcileMs = ParsePositiveInt(NextValue(args, ref index, option, inlineValue), option);
                     break;
-                case "--timeout-ms":
-                    timeoutMs = ParsePositiveInt(NextValue(args, ref index, option, inlineValue), option);
-                    break;
-                case "--titlebar-offset":
-                    titlebarOffset = ParseNonNegativeInt(NextValue(args, ref index, option, inlineValue), option);
+                case "--startup-timeout-ms":
+                    startupTimeoutMs = ParsePositiveInt(NextValue(args, ref index, option, inlineValue), option);
                     break;
                 default:
                     throw new OptionException($"Unknown argument: {argument}");
             }
         }
 
-        if (string.IsNullOrWhiteSpace(browserPath))
-            throw new OptionException("--browser <path> is required.");
-
-        browserPath = Path.GetFullPath(browserPath);
-        if (!File.Exists(browserPath))
-            throw new OptionException($"Browser executable does not exist: {browserPath}");
-
         return new HostOptions
         {
-            BrowserPath = browserPath,
             Url = url,
-            BrowserArguments = browserArguments,
             ExplicitWindowIds = windowIds,
             MonitorUrls = monitorUrls,
             Mode = mode,
             SelectedMonitor = selectedMonitor,
-            PollIntervalMs = pollMs,
-            Timeout = TimeSpan.FromMilliseconds(timeoutMs),
-            TitlebarOffset = titlebarOffset,
+            ReconcileIntervalMs = reconcileMs,
+            StartupTimeout = TimeSpan.FromMilliseconds(startupTimeoutMs),
             Verbose = verbose
         };
     }
@@ -224,11 +199,11 @@ public sealed class HostOptions
         return new WallpaperWindowSpec($"monitor-{index + 1}", url, screens[index].Bounds, virtualBounds);
     }
 
-    private static string NextValue(string[] args, ref int index, string option, string? inlineValue, bool allowOptionLikeValue = false)
+    private static string NextValue(string[] args, ref int index, string option, string? inlineValue)
     {
         if (inlineValue != null)
             return inlineValue;
-        if (++index >= args.Length || (!allowOptionLikeValue && args[index].StartsWith("--", StringComparison.Ordinal)))
+        if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal))
             throw new OptionException($"{option} requires a value.");
         return args[index];
     }
@@ -240,41 +215,49 @@ public sealed class HostOptions
         return parsed;
     }
 
-    private static int ParseNonNegativeInt(string value, string option)
-    {
-        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int parsed) || parsed < 0)
-            throw new OptionException($"{option} requires a non-negative integer.");
-        return parsed;
-    }
-
-    private static string DefaultProbeUrl() =>
-        new Uri(Path.Combine(AppContext.BaseDirectory, "TestAssets", "probe.html")).AbsoluteUri;
+    private static string DefaultProbeUrl() => "file:///probe.html";
 
     public const string HelpText = """
-        ChromiumWall - Chromium live wallpaper host
+        UltralightWall - Ultralight live wallpaper host
 
         Usage:
-          ChromiumWall.exe --browser <path> [options]
+          UltralightWall.exe [options]
 
         Options:
-          --browser <path>       Chromium-compatible executable. Required.
-          --url <url>             HTTP, HTTPS, or file URL. Defaults to probe.html.
-          --monitor-url N=<url>   URL override for 1-based monitor N. Repeatable.
-          --browser-arg <arg>    Additional browser argument. Repeatable.
-          --window <id>           Explicit logical window ID. Repeatable.
-          --mode <mode>           span, all, or single. Default: span.
-          --monitor <number>      1-based monitor for single mode. Default: 1.
-          --poll-ms <n>           Finder polling interval. Default: 250.
-          --timeout-ms <n>        Window discovery timeout. Default: 30000.
-          --titlebar-offset <n>   Move browser client content upward by n pixels. Default: 0.
-          --verbose               Log candidate windows during discovery.
-          --help, -h              Show this help.
-
-        Pages must set document.title to ChromiumWall::<token>.
+          --url <url>                    HTTP, HTTPS, or file URL. Defaults to probe.html.
+          --monitor-url N=<url>           URL override for 1-based monitor N. Repeatable.
+          --window <id>                   Explicit logical window ID. Repeatable.
+          --mode <mode>                   span, all, or single. Default: span.
+          --monitor <number>              1-based monitor for single mode. Default: 1.
+          --reconcile-ms <n>              Desktop reconciliation interval. Default: 250.
+          --startup-timeout-ms <n>        Replacement startup timeout. Default: 30000.
+          --verbose                       Log embedding diagnostics.
+          --help, -h                     Show this help.
         """;
 }
 
 public sealed class OptionException : Exception
 {
     public OptionException(string message) : base(message) { }
+}
+
+public static class UrlBuilder
+{
+    public static string Normalize(string value)
+    {
+        string url = value.Trim();
+        if (!url.Contains("://", StringComparison.Ordinal) &&
+            !url.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            url = $"https://{url}";
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp &&
+             uri.Scheme != Uri.UriSchemeHttps &&
+             uri.Scheme != Uri.UriSchemeFile))
+        {
+            throw new OptionException($"Invalid URL: {url}");
+        }
+
+        return uri.AbsoluteUri;
+    }
 }

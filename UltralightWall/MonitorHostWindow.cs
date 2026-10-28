@@ -1,11 +1,11 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace ChromiumWall;
+namespace UltralightWall;
 
 internal static class MonitorHostWindow
 {
-    private const string ClassName = "ChromiumWallMonitorHost";
+    private const string ClassName = "UltralightWallMonitorHost";
     private const int ErrorClassAlreadyExists = 1410;
     private static readonly object SyncRoot = new();
     private static readonly NativeMethods.WndProc WindowProcedure = WndProc;
@@ -25,7 +25,7 @@ internal static class MonitorHostWindow
 
         if (NativeMethods.IsWindow(existing) && NativeMethods.GetParent(existing) == worker)
         {
-            Position(existing, bounds);
+            Position(existing, worker, bounds, false);
             return existing;
         }
 
@@ -48,7 +48,7 @@ internal static class MonitorHostWindow
             throw new InvalidOperationException(
                 $"Could not create monitor host: {FormatWin32Error(Marshal.GetLastPInvokeError())}");
 
-        Position(host, bounds);
+        Position(host, worker, bounds, true);
         return host;
     }
 
@@ -91,8 +91,26 @@ internal static class MonitorHostWindow
         }
     }
 
-    private static void Position(IntPtr host, Rectangle bounds)
+    private static void Position(IntPtr host, IntPtr worker, Rectangle bounds, bool show)
     {
+        NativeMethods.POINT[] corners =
+        {
+            new() { X = bounds.Left, Y = bounds.Top },
+            new() { X = bounds.Right, Y = bounds.Bottom }
+        };
+        NativeMethods.MapWindowPoints(worker, IntPtr.Zero, corners, 2);
+        Rectangle desiredScreenBounds = Rectangle.FromLTRB(
+            corners[0].X, corners[0].Y, corners[1].X, corners[1].Y);
+        if (NativeMethods.TryGetWindowRect(host, out Rectangle actualScreenBounds) &&
+            actualScreenBounds == desiredScreenBounds)
+            return;
+
+        uint flags = NativeMethods.SWP_NOACTIVATE |
+                     NativeMethods.SWP_NOSENDCHANGING |
+                     NativeMethods.SWP_NOOWNERZORDER;
+        if (show)
+            flags |= NativeMethods.SWP_SHOWWINDOW;
+
         if (!NativeMethods.SetWindowPos(
                 host,
                 NativeMethods.HWND_BOTTOM,
@@ -100,10 +118,7 @@ internal static class MonitorHostWindow
                 bounds.Y,
                 bounds.Width,
                 bounds.Height,
-                NativeMethods.SWP_NOACTIVATE |
-                NativeMethods.SWP_SHOWWINDOW |
-                NativeMethods.SWP_NOSENDCHANGING |
-                NativeMethods.SWP_NOOWNERZORDER))
+                flags))
         {
             throw new InvalidOperationException(
                 $"Could not position monitor host {FormatHwnd(host)}: " +

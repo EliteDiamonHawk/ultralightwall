@@ -1,72 +1,50 @@
-# ChromiumWall
+# UltralightWall
 
-ChromiumWall hosts a Chromium-compatible browser page as a Windows desktop wallpaper. It launches the browser externally in `--app` mode, identifies each resulting native window by a unique title token, then attaches only those windows behind desktop icons.
+UltralightWall hosts web pages as Windows desktop wallpapers using Ultralight AppCore. It creates native Ultralight windows in-process, embeds them behind desktop icons, and keeps tray controls plus low-level desktop input routing.
 
 ## Requirements
 
 - Windows 10/11
 - .NET 9 SDK
-- Chromium-compatible browser executable
+- Windows x64
+- Ultralight SDK `2.0.0-beta.2`
 
-No browser embedding runtime or NuGet browser package is required.
-
-## Build
+Install the pinned SDK into `third_party\ultralight`:
 
 ```powershell
-dotnet build ChromiumWall\ChromiumWall.sln -c Release
-dotnet build ChromiumWall.Tests\ChromiumWall.Tests.csproj -c Release
-dotnet run --project ChromiumWall.Tests\ChromiumWall.Tests.csproj -c Release
+powershell -ExecutionPolicy Bypass -File scripts\setup-ultralight.ps1
+```
+
+The SDK is ignored by Git. Builds also accept `ULTRALIGHT_SDK_ROOT`.
+
+## Build and test
+
+```powershell
+dotnet build UltralightWall\UltralightWall.sln -c Release
+dotnet build UltralightWall.Tests\UltralightWall.Tests.csproj -c Release
+dotnet run --project UltralightWall.Tests\UltralightWall.Tests.csproj -c Release
 ```
 
 ## Run
 
-`--browser` is required. Without `--url`, ChromiumWall launches its copied `TestAssets\probe.html` page.
+Without `--url`, UltralightWall loads its copied `assets\probe.html` page.
 
 ```powershell
-ChromiumWall\bin\Release\net9.0-windows\ChromiumWall.exe `
-  --browser "C:\Path\To\chrome.exe" `
+UltralightWall\bin\Release\net9.0-windows\win-x64\UltralightWall.exe `
   --mode all
 ```
 
-Useful options:
+Options:
 
-- `--browser <path>`: browser executable.
-- `--url <url>`: base HTTP, HTTPS, or file URL.
+- `--url <url>`: HTTP, HTTPS, or file URL.
 - `--monitor-url N=<url>`: per-monitor URL override; repeatable.
 - `--mode span|all|single`: one virtual-screen window, one per monitor, or one selected monitor.
 - `--monitor <number>`: 1-based monitor for `single` mode.
-- `--browser-arg <arg>`: extra browser argument; repeatable.
-- `--poll-ms <n>` and `--timeout-ms <n>`: native window discovery timing.
-- `--titlebar-offset <n>`: move browser client content upward by `n` native pixels; default `0`.
-- `--verbose`: candidate-window diagnostics.
+- `--window <id>`: explicit logical window ID; repeatable.
+- `--reconcile-ms <n>`: desktop geometry/lifecycle reconciliation interval.
+- `--startup-timeout-ms <n>`: replacement startup timeout.
+- `--verbose`: embedding diagnostics.
 - `--help`, `-h`: show help.
-
-## Page title contract
-
-ChromiumWall appends `window` and `token` query parameters to each URL. The page must set its top-level title to:
-
-```javascript
-document.title = `ChromiumWall::${token}`;
-```
-
-This title is the browser-independent launch-to-HWND handshake. The browser process ID is not used because Chromium may forward app launches into an already-running browser instance.
-
-## Chromium
-
-Recommended settings per browser
-
-### Chrome
-
-- enable "Continue running background apps when Google Chrome is closed" in <chrome://settings/system>
-- use `--titlebar-offset 35` 
-
-### Vivaldi
-
-- enable "Continue running background apps when Vivaldi is closed" in <vivaldi:settings/system>
-
-## Tray controls
-
-The tray menu supports base URL changes, per-monitor URL changes, span/all/single monitor modes, reload-all, reload-one, status output, and exit. URL changes and reloads create and validate replacement windows before closing old tracked windows.
 
 ## Behavior
 
@@ -78,14 +56,10 @@ The tray menu supports base URL changes, per-monitor URL changes, span/all/singl
 - Tray controls and CLI help.
 - Mouse, button, double-click, movement, wheel, keyboard, modifier, and web-shortcut forwarding.
 - Desktop icon selection, desktop context menu, critical system keys, and Alt+Tab pass-through.
-- Initialization retries, discovery timeout, lifecycle tracking, and graceful shutdown.
+- Initialization retries, startup timeout, lifecycle tracking, topology reconciliation, and graceful shutdown.
 
-Generic browser limitation: pages that do not implement the title contract cannot be correlated reliably and will time out.
-
-## Future limitations
-
-Explorer restart recovery, display hotplug/reconfiguration, and browser-specific focus/DPI quirks require later platform-specific work.
+Desktop embedding depends on Windows Shell behavior. Explorer restart recovery, display hotplug/reconfiguration, and platform-specific focus/DPI quirks remain outside current scope.
 
 ## License
 
-MIT. See `LICENSE` and `Superswan\LICENSE`.
+MIT. See [LICENSE](LICENSE).

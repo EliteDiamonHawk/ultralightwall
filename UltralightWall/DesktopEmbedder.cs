@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace ChromiumWall;
+namespace UltralightWall;
 
 public sealed class DesktopEmbedder
 {
@@ -14,16 +14,7 @@ public sealed class DesktopEmbedder
                                          NativeMethods.WS_SYSMENU;
 
     private readonly bool _verbose;
-    private readonly int _titlebarOffset;
-
-    public DesktopEmbedder(bool verbose = false, int titlebarOffset = 0)
-    {
-        if (titlebarOffset < 0)
-            throw new ArgumentOutOfRangeException(nameof(titlebarOffset));
-
-        _verbose = verbose;
-        _titlebarOffset = titlebarOffset;
-    }
+    public DesktopEmbedder(bool verbose = false) => _verbose = verbose;
 
     public static long GetBorderlessChildStyle(long style) =>
         (style & ~(FrameStyleMask | NativeMethods.WS_POPUP)) | NativeMethods.WS_CHILD;
@@ -111,8 +102,6 @@ public sealed class DesktopEmbedder
                 $"requested {geometry.Bounds}, actual {actualHostBounds}.");
         }
 
-        CaptureOriginalState(appWindow);
-
         long currentStyle = GetWindowLongPtrChecked(appWindow.Hwnd, NativeMethods.GWL_STYLE, "read style").ToInt64();
         long currentExStyle = GetWindowLongPtrChecked(appWindow.Hwnd, NativeMethods.GWL_EXSTYLE, "read extended style").ToInt64();
         long desiredStyle = GetBorderlessChildStyle(currentStyle);
@@ -152,12 +141,11 @@ public sealed class DesktopEmbedder
         Rectangle targetClientLocal = new(0, 0, geometry.Bounds.Width, geometry.Bounds.Height);
         if (!TryMeasureWindowGeometry(appWindow.Hwnd, out WindowGeometry actualBeforeGeometry))
             throw new InvalidOperationException(
-                $"Could not measure browser client geometry before placement for {appWindow.LogicalId}.");
+                $"Could not measure wallpaper client geometry before placement for {appWindow.LogicalId}.");
 
         NonClientInsets insets = actualBeforeGeometry.Insets;
         Rectangle requestedOuterBounds = CalculateOuterBounds(targetClientLocal, insets);
-        requestedOuterBounds = ApplyTopOverscan(requestedOuterBounds, _titlebarOffset);
-        Rectangle expectedClientLocalBounds = ApplyTopOverscan(targetClientLocal, _titlebarOffset);
+        Rectangle expectedClientLocalBounds = targetClientLocal;
         Rectangle expectedClientScreenBounds = MapRectangleToScreen(expectedClientLocalBounds, monitorHost);
         bool needsPosition = parentChanged || actualBeforeGeometry.ClientScreenBounds != expectedClientScreenBounds;
 
@@ -167,21 +155,21 @@ public sealed class DesktopEmbedder
         if (needsPosition && !NativeMethods.SetWindowPos(appWindow.Hwnd, NativeMethods.HWND_TOP,
                 requestedOuterBounds.X, requestedOuterBounds.Y,
                 requestedOuterBounds.Width, requestedOuterBounds.Height,
-                NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW |
+                NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE |
                 NativeMethods.SWP_NOSENDCHANGING))
         {
             throw new InvalidOperationException(
-                $"Could not position browser window: {appWindow.LogicalId}; {FormatWin32Error(Marshal.GetLastPInvokeError())}");
+                $"Could not position wallpaper window: {appWindow.LogicalId}; {FormatWin32Error(Marshal.GetLastPInvokeError())}");
         }
 
         if (NativeMethods.GetParent(appWindow.Hwnd) != monitorHost)
             throw new InvalidOperationException($"Embedded parent changed unexpectedly for {appWindow.LogicalId}.");
         if (!TryMeasureWindowGeometry(appWindow.Hwnd, out WindowGeometry actualAfterGeometry))
-            throw new InvalidOperationException($"Could not verify browser geometry for {appWindow.LogicalId}.");
+            throw new InvalidOperationException($"Could not verify wallpaper geometry for {appWindow.LogicalId}.");
         Rectangle visibleClientBounds = GetVisibleClientBounds(actualAfterGeometry.ClientScreenBounds, geometry.Bounds);
         if (actualAfterGeometry.ClientScreenBounds != expectedClientScreenBounds || visibleClientBounds != geometry.Bounds)
             throw new InvalidOperationException(
-                $"Browser client geometry mismatch for {appWindow.LogicalId}: " +
+                $"Wallpaper client geometry mismatch for {appWindow.LogicalId}: " +
                 $"requested client {expectedClientScreenBounds}, visible client {visibleClientBounds}, " +
                 $"actual client {actualAfterGeometry.ClientScreenBounds}, " +
                 $"outer {actualAfterGeometry.WindowScreenBounds}.");
@@ -195,9 +183,6 @@ public sealed class DesktopEmbedder
 
     public void Close(AppWindow appWindow)
     {
-        if (appWindow.Hwnd != IntPtr.Zero && NativeMethods.IsWindow(appWindow.Hwnd))
-            NativeMethods.PostMessageW(appWindow.Hwnd, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-
         MonitorHostWindow.Destroy(appWindow.MonitorHostHwnd);
         appWindow.MonitorHostHwnd = IntPtr.Zero;
     }
@@ -255,21 +240,6 @@ public sealed class DesktopEmbedder
             Rectangle.FromLTRB(info.Work.Left, info.Work.Top, info.Work.Right, info.Work.Bottom));
     }
 
-    private static void CaptureOriginalState(AppWindow appWindow)
-    {
-        if (appWindow.OriginalHwnd == appWindow.Hwnd && appWindow.OriginalNativeState != null)
-            return;
-
-        long style = GetWindowLongPtrChecked(appWindow.Hwnd, NativeMethods.GWL_STYLE, "read original style").ToInt64();
-        long exStyle = GetWindowLongPtrChecked(appWindow.Hwnd, NativeMethods.GWL_EXSTYLE, "read original extended style").ToInt64();
-        if (!NativeMethods.TryGetWindowRect(appWindow.Hwnd, out Rectangle bounds))
-            throw new InvalidOperationException($"Could not read original window bounds: {FormatWin32Error(Marshal.GetLastPInvokeError())}");
-
-        appWindow.OriginalHwnd = appWindow.Hwnd;
-        appWindow.OriginalNativeState = new NativeWindowSnapshot(style, exStyle,
-            NativeMethods.GetParent(appWindow.Hwnd), bounds);
-    }
-
     private void LogGeometry(AppWindow appWindow, IntPtr worker, IntPtr monitorHost,
         MonitorGeometry geometry, Rectangle targetClientLocal, NonClientInsets insets,
         Rectangle requestedOuterBounds, Rectangle expectedClientScreenBounds,
@@ -285,18 +255,18 @@ public sealed class DesktopEmbedder
         Rectangle hostClient = GetClientRect(monitorHost);
         long style = GetWindowLongPtrChecked(appWindow.Hwnd, NativeMethods.GWL_STYLE, "read diagnostic style").ToInt64();
         long exStyle = GetWindowLongPtrChecked(appWindow.Hwnd, NativeMethods.GWL_EXSTYLE, "read diagnostic extended style").ToInt64();
-        Rectangle browserOuter = actualAfter?.WindowScreenBounds ?? Rectangle.Empty;
-        int hostOverscanLeft = browserOuter.IsEmpty || hostRect.IsEmpty ? 0 : hostRect.Left - browserOuter.Left;
-        int hostOverscanTop = browserOuter.IsEmpty || hostRect.IsEmpty ? 0 : hostRect.Top - browserOuter.Top;
-        int hostOverscanRight = browserOuter.IsEmpty || hostRect.IsEmpty ? 0 : browserOuter.Right - hostRect.Right;
-        int hostOverscanBottom = browserOuter.IsEmpty || hostRect.IsEmpty ? 0 : browserOuter.Bottom - hostRect.Bottom;
+        Rectangle wallpaperOuter = actualAfter?.WindowScreenBounds ?? Rectangle.Empty;
+        int hostOverscanLeft = wallpaperOuter.IsEmpty || hostRect.IsEmpty ? 0 : hostRect.Left - wallpaperOuter.Left;
+        int hostOverscanTop = wallpaperOuter.IsEmpty || hostRect.IsEmpty ? 0 : hostRect.Top - wallpaperOuter.Top;
+        int hostOverscanRight = wallpaperOuter.IsEmpty || hostRect.IsEmpty ? 0 : wallpaperOuter.Right - hostRect.Right;
+        int hostOverscanBottom = wallpaperOuter.IsEmpty || hostRect.IsEmpty ? 0 : wallpaperOuter.Bottom - hostRect.Bottom;
         Console.WriteLine(
-            $"[EmbedCheck] logicalId={appWindow.LogicalId}, token={appWindow.Token}, hwnd={FormatHwnd(appWindow.Hwnd)}, " +
+            $"[EmbedCheck] logicalId={appWindow.LogicalId}, hwnd={FormatHwnd(appWindow.Hwnd)}, " +
             $"monitor={FormatHwnd(geometry.Monitor)}, rcMonitor={geometry.Bounds}, rcWork={geometry.Work}, " +
             $"worker={FormatHwnd(worker)}, workerRect={workerRect}, workerClient={GetClientRect(worker)}, " +
             $"monitorHost={FormatHwnd(monitorHost)}, hostParent={FormatHwnd(NativeMethods.GetParent(monitorHost))}, " +
             $"hostRect={hostRect}, hostClient={hostClient}, targetClientLocal={targetClientLocal}, " +
-            $"titlebarOffset={_titlebarOffset}, expectedClientScreen={expectedClientScreenBounds}, " +
+            $"expectedClientScreen={expectedClientScreenBounds}, " +
             $"windowBefore={actualBefore.WindowScreenBounds}, clientLocalBefore={actualBefore.ClientLocalBounds}, " +
             $"clientScreenBefore={actualBefore.ClientScreenBounds}, nonClient={insets}, " +
             $"requestedOuter={requestedOuterBounds}, " +
@@ -304,8 +274,8 @@ public sealed class DesktopEmbedder
             $"clientScreenAfter={actualAfter?.ClientScreenBounds}, " +
             $"hostOverscanLeft={hostOverscanLeft}, hostOverscanTop={hostOverscanTop}, " +
             $"hostOverscanRight={hostOverscanRight}, hostOverscanBottom={hostOverscanBottom}, " +
-            $"browserParent={FormatHwnd(NativeMethods.GetParent(appWindow.Hwnd))}, " +
-            $"style=0x{style:X}, exStyle=0x{exStyle:X}, browserDpi={NativeMethods.GetDpiForWindow(appWindow.Hwnd)}, " +
+            $"wallpaperParent={FormatHwnd(NativeMethods.GetParent(appWindow.Hwnd))}, " +
+            $"style=0x{style:X}, exStyle=0x{exStyle:X}, wallpaperDpi={NativeMethods.GetDpiForWindow(appWindow.Hwnd)}, " +
             $"hostDpi={NativeMethods.GetDpiForWindow(monitorHost)}, workerDpi={NativeMethods.GetDpiForWindow(worker)}");
     }
 

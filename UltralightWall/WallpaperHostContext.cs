@@ -1,10 +1,9 @@
-namespace ChromiumWall;
+namespace UltralightWall;
 
 public sealed class WallpaperHostContext : ApplicationContext
 {
     private readonly HostOptions _options;
-    private readonly BrowserLauncher _launcher;
-    private readonly WindowFinder _finder;
+    private readonly UltralightRuntime _runtime;
     private readonly DesktopEmbedder _embedder;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly NotifyIcon _tray;
@@ -24,15 +23,15 @@ public sealed class WallpaperHostContext : ApplicationContext
     private bool _closeCheckLogged;
     private bool _allWindowsMissingLogged;
     private string _topologySignature;
+    private DateTimeOffset _nextReconcile = DateTimeOffset.MinValue;
     private ToolStripMenuItem? _spanItem;
     private ToolStripMenuItem? _allItem;
 
     public WallpaperHostContext(HostOptions options)
     {
         _options = options;
-        _launcher = new BrowserLauncher(options.BrowserPath);
-        _finder = new WindowFinder(new NativeWindowSnapshotProvider(), options.BrowserPath, options.Verbose);
-        _embedder = new DesktopEmbedder(options.Verbose, options.TitlebarOffset);
+        _runtime = new UltralightRuntime();
+        _embedder = new DesktopEmbedder(options.Verbose);
         _baseUrl = options.Url;
         _monitorUrls = new Dictionary<int, string>(options.MonitorUrls);
         _mode = options.Mode;
@@ -43,18 +42,34 @@ public sealed class WallpaperHostContext : ApplicationContext
         _tray = new NotifyIcon
         {
             Icon = SystemIcons.Application,
-            Text = "ChromiumWall",
+            Text = "UltralightWall",
             Visible = true,
             ContextMenuStrip = _menu
         };
         BuildMenu();
 
         _input = new InputRouter(() => _windows);
-        _timer = new System.Windows.Forms.Timer { Interval = options.PollIntervalMs };
-        _timer.Tick += (_, _) => PollWindows();
+        _timer = new System.Windows.Forms.Timer { Interval = 16 };
+        _timer.Tick += (_, _) => Tick();
         _timer.Start();
 
         BeginReplacement(options.ResolveWindowSpecs(_baseUrl, _mode, _selectedMonitor, _monitorUrls), Array.Empty<WallpaperWindow>());
+    }
+
+    private void Tick()
+    {
+        if (_exiting)
+            return;
+
+        try
+        {
+            _runtime.Pump();
+            PollWindows();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Runtime] tick failed: {ex.Message}");
+        }
     }
 
     private void BuildMenu()
@@ -109,76 +124,48 @@ public sealed class WallpaperHostContext : ApplicationContext
     private void PollWindows()
     {
         if (_pending != null)
+        {
             PollPending();
+            return;
+        }
 
-        if (_pending == null && !_exiting && GetTopologySignature() != _topologySignature)
+        if (GetTopologySignature() != _topologySignature)
         {
             _topologySignature = GetTopologySignature();
             BeginReplacement(_options.ResolveWindowSpecs(_baseUrl, _mode, _selectedMonitor, _monitorUrls), _windows);
             return;
         }
 
+        if (DateTimeOffset.UtcNow < _nextReconcile)
+            return;
+        _nextReconcile = DateTimeOffset.UtcNow.AddMilliseconds(_options.ReconcileIntervalMs);
+
         foreach (WallpaperWindow window in _windows.ToArray())
         {
             AppWindow appWindow = window.AppWindow;
-            if (appWindow.State is AppWindowState.Found or AppWindowState.Embedded)
-            {
-                if (!_finder.IsExpected(appWindow))
-                {
-                    _registry.MarkPendingForRediscovery(appWindow, DateTimeOffset.UtcNow);
-                    Console.WriteLine($"[Finder] HWND lost or identity changed: {appWindow.LogicalId}; rediscovery started.");
-                    continue;
-                }
+            if (appWindow.State != AppWindowState.Embedded)
+                continue;
 
-                try
-                {
-                    _embedder.Reconcile(appWindow);
-                    _registry.MarkEmbedded(appWindow);
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[Embed] reconciliation failed for {appWindow.LogicalId}: {ex.Message}");
-                }
-            }
-            else if (appWindow.State == AppWindowState.Pending)
+            if (!NativeMethods.IsWindow(appWindow.Hwnd))
             {
-                PollRediscovery(appWindow);
+                _registry.MarkUnexpectedClose(appWindow);
+                Console.Error.WriteLine($"[Lifecycle] Ultralight window lost: {appWindow.LogicalId}");
+                BeginReplacement(_options.ResolveWindowSpecs(_baseUrl, _mode, _selectedMonitor, _monitorUrls), _windows);
+                return;
+            }
+
+            try
+            {
+                _embedder.Reconcile(appWindow);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Embed] reconciliation failed for {appWindow.LogicalId}: {ex.Message}");
             }
         }
 
         LogAllWindowsMissingIfNeeded();
         CheckForAllWindowsClosed();
-    }
-
-    private void PollRediscovery(AppWindow appWindow)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        if (appWindow.IsExpired(now))
-        {
-            _registry.MarkClosed(appWindow);
-            Console.WriteLine($"[Finder] rediscovery timeout: {appWindow.LogicalId}");
-            return;
-        }
-
-        WindowSearchResult result = _finder.Find(appWindow, _registry);
-        if (result.Status != WindowSearchStatus.Found)
-        {
-            if (result.Status == WindowSearchStatus.Ambiguous)
-                Console.Error.WriteLine($"[Finder] ambiguous rediscovery: {appWindow.LogicalId} ({result.MatchCount} windows)");
-            return;
-        }
-
-        _registry.MarkFound(appWindow, result.Hwnd);
-        try
-        {
-            OnAppWindowFound(appWindow, _registry);
-            Console.WriteLine($"[Finder] rediscovered window: {appWindow.LogicalId} -> {FormatHwnd(result.Hwnd)}");
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[Embed] failed after rediscovery for {appWindow.LogicalId}: {ex.Message}");
-            _registry.MarkPendingForRetry(appWindow);
-        }
     }
 
     private void PollPending()
@@ -193,33 +180,27 @@ public sealed class WallpaperHostContext : ApplicationContext
 
             if (appWindow.IsExpired(now))
             {
-                pending.Registry.MarkFailed(appWindow, "window did not appear before timeout");
-                Console.Error.WriteLine($"[Finder] timeout: {appWindow.LogicalId}");
+                pending.Registry.MarkFailed(appWindow, "window did not embed before startup timeout");
+                Console.Error.WriteLine($"[Embed] timeout: {appWindow.LogicalId}");
                 continue;
             }
 
-            if (_options.Verbose)
-                Console.WriteLine($"[Finder] searching for token {appWindow.Token}");
-
-            WindowSearchResult result = _finder.Find(appWindow, pending.Registry);
-            if (result.Status == WindowSearchStatus.Found)
+            if (!NativeMethods.IsWindow(appWindow.Hwnd))
             {
-                pending.Registry.MarkFound(appWindow, result.Hwnd);
-                Console.WriteLine($"[Finder] matched window: {appWindow.LogicalId} -> {FormatHwnd(result.Hwnd)}");
-                try
-                {
-                    OnAppWindowFound(appWindow, pending.Registry);
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[Embed] failed for {appWindow.LogicalId}: {ex.Message}");
-                    pending.Registry.MarkPendingForRetry(appWindow);
-                }
+                pending.Registry.MarkFailed(appWindow, "native window handle became invalid");
+                continue;
             }
-            else if (result.Status == WindowSearchStatus.Ambiguous)
+
+            try
             {
-                pending.Registry.MarkFailed(appWindow, "multiple windows matched token");
-                Console.Error.WriteLine($"[Finder] ambiguous match: {appWindow.LogicalId} ({result.MatchCount} windows)");
+                _embedder.Embed(appWindow);
+                pending.Registry.MarkEmbedded(appWindow);
+                _runtime.ShowWhenReady(appWindow, _options.StartupTimeout);
+                Console.WriteLine($"[Ultralight] embedded {appWindow.LogicalId} -> {FormatHwnd(appWindow.Hwnd)}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Embed] failed for {appWindow.LogicalId}: {ex.Message}");
             }
         }
 
@@ -233,15 +214,6 @@ public sealed class WallpaperHostContext : ApplicationContext
             CommitPending();
     }
 
-    private void OnAppWindowFound(AppWindow appWindow, WindowRegistry registry)
-    {
-        _embedder.Embed(appWindow);
-        registry.MarkEmbedded(appWindow);
-    }
-
-    private static string GetTopologySignature() =>
-        string.Join("|", Screen.AllScreens.Select(screen => $"{screen.DeviceName}:{screen.Bounds}"));
-
     private void BeginReplacement(IReadOnlyList<WallpaperWindowSpec> specs, IReadOnlyList<WallpaperWindow> targets)
     {
         if (_pending != null)
@@ -252,24 +224,22 @@ public sealed class WallpaperHostContext : ApplicationContext
 
         var registry = new WindowRegistry();
         var windows = new List<WallpaperWindow>();
-        foreach (WallpaperWindowSpec spec in specs)
+        try
         {
-            AppWindow appWindow = _launcher.CreateRequest(spec, _options.Timeout);
-            registry.Add(appWindow);
-            windows.Add(new WallpaperWindow(appWindow));
-
-            Console.WriteLine($"[Browser] launching app window: {spec.LogicalId}");
-            Console.WriteLine($"[Browser] token: {appWindow.Token}");
-            Console.WriteLine($"[Browser] URL: {appWindow.Url}");
-            try
+            foreach (WallpaperWindowSpec spec in specs)
             {
-                _launcher.Start(appWindow, _options.BrowserArguments);
+                AppWindow appWindow = _runtime.CreateWindow(spec, _options.StartupTimeout);
+                registry.Add(appWindow);
+                windows.Add(new WallpaperWindow(appWindow));
+                Console.WriteLine($"[Ultralight] created {spec.LogicalId}: {spec.Url}");
             }
-            catch (Exception ex)
-            {
-                registry.MarkFailed(appWindow, ex.Message);
-                Console.Error.WriteLine($"[Browser] launch failed for {spec.LogicalId}: {ex.Message}");
-            }
+        }
+        catch (Exception ex)
+        {
+            foreach (WallpaperWindow window in windows)
+                _runtime.DestroyWindow(window.AppWindow);
+            Console.Error.WriteLine($"[Replace] creation failed: {ex.Message}");
+            return;
         }
 
         _pending = new ReplacementBatch(registry, windows, targets.ToArray());
@@ -279,10 +249,7 @@ public sealed class WallpaperHostContext : ApplicationContext
     {
         ReplacementBatch pending = _pending!;
         foreach (WallpaperWindow oldWindow in pending.Targets)
-        {
-            _registry.MarkIntentionalClose(oldWindow.AppWindow);
-            _embedder.Close(oldWindow.AppWindow);
-        }
+            CloseTracked(oldWindow);
 
         var remaining = _windows.Where(window => !pending.Targets.Contains(window)).ToList();
         var mergedRegistry = new WindowRegistry();
@@ -297,7 +264,7 @@ public sealed class WallpaperHostContext : ApplicationContext
         _closeCheckLogged = false;
         _allWindowsMissingLogged = false;
         BuildMenu();
-        Console.WriteLine("[Replace] committed new browser windows.");
+        Console.WriteLine("[Replace] committed new Ultralight windows.");
     }
 
     private void AbortPending()
@@ -305,11 +272,8 @@ public sealed class WallpaperHostContext : ApplicationContext
         ReplacementBatch pending = _pending!;
         foreach (AppWindow appWindow in pending.Registry.Items)
         {
-            if (appWindow.State is AppWindowState.Found or AppWindowState.Embedded)
-            {
-                pending.Registry.MarkIntentionalClose(appWindow);
-                _embedder.Close(appWindow);
-            }
+            pending.Registry.MarkFailed(appWindow, appWindow.FailureReason ?? "replacement aborted");
+            _runtime.DestroyWindow(appWindow);
         }
 
         _pending = null;
@@ -346,7 +310,7 @@ public sealed class WallpaperHostContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "ChromiumWall - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(ex.Message, "UltralightWall - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -364,7 +328,7 @@ public sealed class WallpaperHostContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "ChromiumWall - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(ex.Message, "UltralightWall - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -385,7 +349,7 @@ public sealed class WallpaperHostContext : ApplicationContext
     {
         foreach (AppWindow appWindow in _registry.Items)
         {
-            Console.WriteLine($"[Status] {appWindow.LogicalId}: {appWindow.State}, token={appWindow.Token}, " +
+            Console.WriteLine($"[Status] {appWindow.LogicalId}: {appWindow.State}, " +
                 $"HWND={FormatHwnd(appWindow.Hwnd)}, host={FormatHwnd(appWindow.MonitorHostHwnd)}, url={appWindow.Spec.Url}");
         }
     }
@@ -403,27 +367,32 @@ public sealed class WallpaperHostContext : ApplicationContext
         if (_exiting)
             return;
 
-        foreach (AppWindow appWindow in _registry.Items.Concat(_pending?.Registry.Items ?? Array.Empty<AppWindow>()))
+        _exiting = true;
+        if (_pending != null)
         {
-            if (appWindow.State is AppWindowState.Found or AppWindowState.Embedded)
-            {
-                _registry.MarkIntentionalClose(appWindow);
-                _embedder.Close(appWindow);
-                appWindow.State = AppWindowState.Closed;
-            }
+            foreach (AppWindow appWindow in _pending.Registry.Items)
+                _runtime.DestroyWindow(appWindow);
+            _pending = null;
         }
 
-        CheckForAllWindowsClosed();
+        foreach (WallpaperWindow window in _windows.ToArray())
+            CloseTracked(window);
 
-        _exiting = true;
         _timer.Stop();
         _input.Dispose();
-
         _tray.Visible = false;
         _tray.Dispose();
         _menu.Dispose();
         _timer.Dispose();
+        _runtime.Dispose();
         ExitThread();
+    }
+
+    private void CloseTracked(WallpaperWindow window)
+    {
+        _registry.MarkIntentionalClose(window.AppWindow);
+        _embedder.Close(window.AppWindow);
+        _runtime.DestroyWindow(window.AppWindow);
     }
 
     private void CheckForAllWindowsClosed()
@@ -434,14 +403,11 @@ public sealed class WallpaperHostContext : ApplicationContext
         bool intentional = CloseCheck.IsIntentional(_windows.Select(window => window.AppWindow));
         Console.WriteLine($"[CloseCheck] all tracked windows closed; intentional={intentional.ToString().ToLowerInvariant()}");
         _closeCheckLogged = true;
-
     }
 
     private void LogAllWindowsMissingIfNeeded()
     {
-        bool allMissing = _windows.Count > 0 && _windows.All(window =>
-            window.AppWindow.State == AppWindowState.Pending);
-
+        bool allMissing = _windows.Count > 0 && _windows.All(window => window.AppWindow.State == AppWindowState.Pending);
         if (!allMissing)
         {
             _allWindowsMissingLogged = false;
@@ -450,10 +416,13 @@ public sealed class WallpaperHostContext : ApplicationContext
 
         if (!_allWindowsMissingLogged)
         {
-            Console.WriteLine("[CloseCheck] all tracked windows missing; waiting for rediscovery timeout.");
+            Console.WriteLine("[Lifecycle] all tracked windows missing; waiting for startup timeout.");
             _allWindowsMissingLogged = true;
         }
     }
+
+    private static string GetTopologySignature() =>
+        string.Join("|", Screen.AllScreens.Select(screen => $"{screen.DeviceName}:{screen.Bounds}"));
 
     private static string FormatHwnd(IntPtr hwnd) => hwnd == IntPtr.Zero ? "<none>" : $"0x{hwnd.ToInt64():X}";
 

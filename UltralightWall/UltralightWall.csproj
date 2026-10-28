@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>UltralightWall</AssemblyName>
+    <RootNamespace>UltralightWall</RootNamespace>
+    <UltralightSdkRoot Condition="'$(ULTRALIGHT_SDK_ROOT)' != ''">$(ULTRALIGHT_SDK_ROOT)</UltralightSdkRoot>
+    <UltralightSdkRoot Condition="'$(UltralightSdkRoot)' == ''">$(MSBuildProjectDirectory)\..\third_party\ultralight</UltralightSdkRoot>
+  </PropertyGroup>
+
+  <Target Name="ValidateUltralightSdk" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(UltralightSdkRoot)\include\AppCore\CAPI.h')" Text="Ultralight SDK missing. Run scripts\setup-ultralight.ps1 or set ULTRALIGHT_SDK_ROOT." />
+    <Error Condition="!Exists('$(UltralightSdkRoot)\bin\AppCore.dll')" Text="Ultralight AppCore.dll missing under $(UltralightSdkRoot)." />
+    <Error Condition="!Exists('$(UltralightSdkRoot)\bin\Ultralight.dll')" Text="Ultralight.dll missing under $(UltralightSdkRoot)." />
+    <Error Condition="!Exists('$(UltralightSdkRoot)\bin\UltralightCore.dll')" Text="UltralightCore.dll missing under $(UltralightSdkRoot)." />
+    <Error Condition="!Exists('$(UltralightSdkRoot)\bin\WebCore.dll')" Text="WebCore.dll missing under $(UltralightSdkRoot)." />
+    <Error Condition="!Exists('$(UltralightSdkRoot)\resources')" Text="Ultralight resources missing under $(UltralightSdkRoot)." />
+  </Target>
+
+  <ItemGroup>
+    <None Include="$(UltralightSdkRoot)\bin\AppCore.dll" Link="AppCore.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(UltralightSdkRoot)\bin\Ultralight.dll" Link="Ultralight.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(UltralightSdkRoot)\bin\UltralightCore.dll" Link="UltralightCore.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(UltralightSdkRoot)\bin\WebCore.dll" Link="WebCore.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(UltralightSdkRoot)\resources\**\*" Link="assets\resources\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="TestAssets\probe.html" Link="assets\probe.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

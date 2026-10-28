@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Keep project SDK pin and release URL in one easy-to-change location.
-$UltralightSdkVersion = 'latest'
+$UltralightSdkVersion = '2.0.0-beta.2'
 # Official API accepts versioned downloads and returns the appropriate archive.
 $UltralightSdkDownloadUrl = "https://ultralig.ht/api/v1/sdk/download?platform=windows-x64&version=$UltralightSdkVersion"
 
@@ -15,7 +15,7 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $ThirdPartyRoot = Join-Path $ProjectRoot 'third_party'
 $InstallRoot = Join-Path $ThirdPartyRoot 'ultralight'
 $ManifestPath = Join-Path $InstallRoot 'sdk-version.json'
-$TempRoot = Join-Path ([IO.Path]::GetTempPath()) ("wv2wall-ultralight-" + [guid]::NewGuid().ToString('N'))
+$TempRoot = Join-Path ([IO.Path]::GetTempPath()) ("ultralightwall-sdk-" + [guid]::NewGuid().ToString('N'))
 $StagingRoot = Join-Path $ThirdPartyRoot (".ultralight-staging-" + [guid]::NewGuid().ToString('N'))
 $BackupRoot = Join-Path $ThirdPartyRoot (".ultralight-backup-" + [guid]::NewGuid().ToString('N'))
 $BackupCreated = $false
