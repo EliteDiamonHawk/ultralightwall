@@ -34,3 +34,8 @@ Thumbs.db
 
 .agents/skills/
 experimental/
+
+# Locally installed Ultralight SDK and setup staging files.
+third_party/ultralight/
+third_party/.ultralight-staging-*/
+third_party/.ultralight-backup-*/
