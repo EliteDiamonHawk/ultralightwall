@@ -65,7 +65,20 @@ public sealed class UltralightRuntime : IDisposable
                 throw new InvalidOperationException($"Ultralight window has no native handle: {spec.LogicalId}");
 
             UltralightNative.ulWindowSetTitle(window, $"UltralightWall - {spec.LogicalId}");
-            panel = UltralightNative.ulWindowAddPanel(window, IntPtr.Zero, IntPtr.Zero);
+            IntPtr viewConfig = UltralightNative.ulCreateViewConfig();
+            if (viewConfig == IntPtr.Zero)
+                throw new InvalidOperationException($"Ultralight view configuration could not be created: {spec.LogicalId}");
+
+            try
+            {
+                UltralightNative.ulViewConfigSetEnableHiddenTimerThrottling(viewConfig, true);
+                panel = UltralightNative.ulWindowAddPanel(window, IntPtr.Zero, viewConfig);
+            }
+            finally
+            {
+                UltralightNative.ulDestroyViewConfig(viewConfig);
+            }
+
             if (panel == IntPtr.Zero)
                 throw new InvalidOperationException($"Ultralight panel could not be created: {spec.LogicalId}");
 
@@ -97,6 +110,26 @@ public sealed class UltralightRuntime : IDisposable
 
     public bool Pump() => _app != IntPtr.Zero && UltralightNative.ulAppRunOnce(_app, 0);
 
+    public bool TrySetSuspended(AppWindow appWindow, bool suspended)
+    {
+        if (_app == IntPtr.Zero || appWindow.UlView == IntPtr.Zero ||
+            appWindow.State is AppWindowState.Closed or AppWindowState.Failed)
+        {
+            return false;
+        }
+
+        try
+        {
+            UltralightNative.ulViewSetVisible(appWindow.UlView, !suspended);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Suspension] transition failed for {appWindow.LogicalId}: {ex.Message}");
+            return false;
+        }
+    }
+
     public void DestroyWindow(AppWindow appWindow)
     {
         DestroyWindow(appWindow.UlWindow, appWindow.UlPanel, appWindow.UlView);
@@ -104,6 +137,7 @@ public sealed class UltralightRuntime : IDisposable
         appWindow.UlPanel = IntPtr.Zero;
         appWindow.UlView = IntPtr.Zero;
         appWindow.Hwnd = IntPtr.Zero;
+        appWindow.RendererSuspended = false;
         appWindow.State = AppWindowState.Closed;
     }
 
@@ -189,6 +223,10 @@ public sealed class AppWindow
     public DateTimeOffset Deadline { get; internal set; }
     public IntPtr Hwnd { get; internal set; }
     public IntPtr MonitorHostHwnd { get; internal set; }
+    public IntPtr MonitorHandle { get; internal set; }
+    public bool FullscreenOccluded { get; internal set; }
+    public bool DesiredSuspended { get; internal set; }
+    public bool RendererSuspended { get; internal set; }
     public AppWindowState State { get; internal set; } = AppWindowState.Pending;
     public WindowCloseIntent CloseIntent { get; internal set; } = WindowCloseIntent.None;
     public string? FailureReason { get; internal set; }

@@ -89,5 +89,21 @@ internal static class UltralightNative
     internal static extern void ulViewLoadURL(IntPtr view, IntPtr url);
 
     [DllImport(Core, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr ulCreateViewConfig();
+
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void ulDestroyViewConfig(IntPtr config);
+
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void ulViewConfigSetEnableHiddenTimerThrottling(
+        IntPtr config,
+        [MarshalAs(UnmanagedType.I1)] bool enabled);
+
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void ulViewSetVisible(
+        IntPtr view,
+        [MarshalAs(UnmanagedType.I1)] bool visible);
+
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void ulDestroyView(IntPtr view);
 }

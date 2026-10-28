@@ -23,7 +23,9 @@ internal static class Program
             (nameof(NonClientInsetsAreDerived), NonClientInsetsAreDerived),
             (nameof(ClientBoundsExpandByMeasuredInsets), ClientBoundsExpandByMeasuredInsets),
             (nameof(BorderlessStyleTransformationIsIdempotent), BorderlessStyleTransformationIsIdempotent),
-            (nameof(MonitorHostStyleClipsChildrenAndSiblings), MonitorHostStyleClipsChildrenAndSiblings)
+            (nameof(MonitorHostStyleClipsChildrenAndSiblings), MonitorHostStyleClipsChildrenAndSiblings),
+            (nameof(SuspensionPolicyCombinesManualAndFullscreenState), SuspensionPolicyCombinesManualAndFullscreenState),
+            (nameof(SuspensionPolicyDisablingAutomaticPauseRestoresVisibleWallpaper), SuspensionPolicyDisablingAutomaticPauseRestoresVisibleWallpaper)
         };
 
         int failures = 0;
@@ -191,6 +193,21 @@ internal static class Program
         AssertTrue((style & 0x40000000L) != 0);
         AssertTrue((style & 0x02000000L) != 0);
         AssertTrue((style & 0x04000000L) != 0);
+    }
+
+    private static void SuspensionPolicyCombinesManualAndFullscreenState()
+    {
+        AssertFalse(WallpaperSuspensionPolicy.ShouldSuspend(false, true, false));
+        AssertTrue(WallpaperSuspensionPolicy.ShouldSuspend(false, true, true));
+        AssertFalse(WallpaperSuspensionPolicy.ShouldSuspend(false, false, true));
+        AssertTrue(WallpaperSuspensionPolicy.ShouldSuspend(true, false, false));
+    }
+
+    private static void SuspensionPolicyDisablingAutomaticPauseRestoresVisibleWallpaper()
+    {
+        AssertTrue(WallpaperSuspensionPolicy.ShouldSuspend(true, false, false));
+        AssertFalse(WallpaperSuspensionPolicy.ShouldSuspend(false, false, true));
+        AssertTrue(WallpaperSuspensionPolicy.ShouldSuspend(false, true, true));
     }
 
     private static void RuntimeSmokeTest()
